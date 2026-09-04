@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orders API - By ChatGPT</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 32px;
+            font-family: Arial, sans-serif;
+            background: #f5f5f5;
+            color: #222;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 28px;
+        }
+
+        button {
+            border: 0;
+            border-radius: 6px;
+            padding: 10px 16px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .create-button {
+            background: #2563eb;
+            color: white;
+        }
+
+        .create-button:hover {
+            background: #1d4ed8;
+        }
+
+        .recovery-button {
+            background: #4b5563;
+            color: white;
+        }
+
+        .recovery-button:hover {
+            background: #4b5563;
+        }
+
+        .orders {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .order-card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+
+        .field {
+            padding: 7px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .field:last-child {
+            border-bottom: 0;
+        }
+
+        .field-name {
+            font-weight: bold;
+            margin-right: 8px;
+        }
+
+        .field-value {
+            word-break: break-all;
+        }
+
+        .actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 18px;
+            padding-top: 16px;
+            border-top: 1px solid #eee;
+        }
+
+        .success-button {
+            background: #16a34a;
+            color: white;
+        }
+
+        .success-button:hover {
+            background: #15803d;
+        }
+
+        .failed-button {
+            background: #dc2626;
+            color: white;
+        }
+
+        .failed-button:hover {
+            background: #b91c1c;
+        }
+
+        .issues-button {
+            background: #6b7280;
+            color: white;
+        }
+
+        .issues-button:hover {
+            background: #4b5563;
+        }
+
+        .loading,
+        .empty,
+        .error {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .error {
+            color: #dc2626;
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.5);
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .modal.visible {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            width: 100%;
+            max-width: 700px;
+            max-height: 80vh;
+            overflow: auto;
+            border-radius: 10px;
+            padding: 24px;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .modal-header h2 {
+            margin: 0;
+        }
+
+        .close-button {
+            background: #eee;
+            color: #333;
+        }
+
+        pre {
+            margin: 0;
+            padding: 16px;
+            background: #f5f5f5;
+            border-radius: 6px;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <div class="header"><h1>Orders</h1></div>
+
+    <p>Сгенерировано через ChatGPT для визуального тестирования API.</p>
+
+    <p>Create Order - создаёт новый заказ.</p>
+
+    <button
+            class="create-button"
+            id="createOrderButton"
+            onclick="createOrder()"
+        >
+            Create Order
+        </button>
+
+    <p>Recovery Orders - пытаемся восстановить заказы после различных сбоев.</p>
+
+    <button
+            class="recovery-button"
+            id="recoveryOrdersButton"
+            onclick="recoveryOrders()"
+        >
+            Recovery Orders
+        </button>
+
+    <p>Оплата заказов по кнопкам <strong>paid success</strong> и <strong>paid failed</strong>. Запрос отправляется в сервис платежей.
+        Кнопки доступны только для статуса created и после создания платежа в сервисе платежей (заполняется <strong>extID</strong>).</p>
+
+    <p><strong>Большинство запросов ассинхронные - необходимо подождать и вручную обновить страницу.</strong></p>
+
+    <div id="orders" class="orders">
+        <div class="loading">Loading...</div>
+    </div>
+
+</div>
+
+<!-- Issues modal -->
+<div id="issuesModal" class="modal" onclick="closeModal(event)">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Order Issues</h2>
+
+            <button
+                class="close-button"
+                onclick="hideIssues()"
+            >
+                Close
+            </button>
+        </div>
+
+        <pre id="issuesContent"></pre>
+    </div>
+</div>
+
+<script>
+    const ordersContainer = document.getElementById("orders");
+    const createOrderButton = document.getElementById("createOrderButton");
+
+    /**
+     * Универсальная обработка API-ответа.
+     */
+    async function parseResponse(response) {
+        const contentType = response.headers.get("content-type") || "";
+
+        let data;
+
+        if (contentType.includes("application/json")) {
+            data = await response.json();
+        } else {
+            data = await response.text();
+        }
+
+        if (!response.ok) {
+            let message;
+
+            if (typeof data === "string") {
+                message = data;
+            } else {
+                message = JSON.stringify(data);
+            }
+
+            throw new Error(
+                `HTTP ${response.status}: ${message}`
+            );
+        }
+
+        return data;
+    }
+
+    /**
+     * Получение списка заказов.
+     */
+    async function loadOrders() {
+        ordersContainer.innerHTML = `
+            <div class="loading">Loading...</div>
+        `;
+
+        try {
+            const response = await fetch("/api/orders", {
+                method: "GET",
+                headers: {
+                    "Accept": "application/json"
+                }
+            });
+
+            const orders = await parseResponse(response);
+
+            renderOrders(orders);
+        } catch (error) {
+            console.error(error);
+
+            ordersContainer.innerHTML = `
+                <div class="error">
+                    Не удалось загрузить заказы.<br>
+                    ${escapeHtml(error.message)}
+                </div>
+            `;
+        }
+    }
+
+    /**
+     * Отрисовка заказов.
+     */
+    function renderOrders(orders) {
+        if (!Array.isArray(orders) || orders.length === 0) {
+            ordersContainer.innerHTML = `
+                <div class="empty">
+                    Заказов нет
+                </div>
+            `;
+
+            return;
+        }
+
+        ordersContainer.innerHTML = orders.sort((a, b) => b.ID - a.ID).map(order => `
+            <div class="order-card">
+
+                <div class="field">
+                    <span class="field-name">ID:</span>
+                    <span class="field-value">
+                        ${escapeHtml(order.ID)}
+                    </span>
+                </div>
+
+                <div class="field">
+                    <span class="field-name">extID:</span>
+                    <span class="field-value">
+                        ${escapeHtml(order.ExtID)}
+                    </span>
+                </div>
+
+                <div class="field">
+                    <span class="field-name">status:</span>
+                    <span class="field-value">
+                        ${escapeHtml(order.Status)}
+                    </span>
+                </div>
+
+                <div class="field">
+                    <span class="field-name">code:</span>
+                    <span class="field-value">
+                        ${escapeHtml(order.Code)}
+                    </span>
+                </div>
+
+                <div class="actions">
+                    ${order.Status == "created" && order.ExtID ? `<button
+                        class="success-button"
+                        onclick="changePaymentStatus('${escapeJs(order.ExtID)}', 'paid')"
+                    >
+                        paid success
+                    </button>
+
+                    <button
+                        class="failed-button"
+                        onclick="changePaymentStatus('${escapeJs(order.ExtID)}', 'failed')"
+                    >
+                        paid failed
+                    </button>` : ""}
+
+                    <button
+                        class="issues-button"
+                        onclick="showIssues('${escapeJs(order.ID)}')"
+                    >
+                        show issues
+                    </button>
+
+                </div>
+
+            </div>
+        `).join("");
+    }
+
+    /**
+     * Создание заказа.
+     *
+     * POST /api/orders
+     */
+    async function createOrder() {
+        createOrderButton.disabled = true;
+
+        try {
+            const response = await fetch("/api/orders", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                },
+                body: JSON.stringify({
+                    userId: 1,
+                    sku: [
+                        "STEAM-TOPUP-500",
+                        "STEAM-TOPUP-1000"
+                    ]
+                })
+            });
+
+            await parseResponse(response);
+
+            // После успешного запроса обновляем страницу.
+            window.location.reload();
+
+        } catch (error) {
+            console.error(error);
+
+            alert(
+                "Не удалось создать заказ:\n\n" +
+                error.message
+            );
+
+            createOrderButton.disabled = false;
+        }
+    }
+
+    /**
+     * Изменение статуса оплаты.
+     *
+     * POST /api/payments/$orderExtID/status/$status
+     */
+    async function changePaymentStatus(orderExtID, status) {
+        try {
+            const url =
+                `/api/payments/${encodeURIComponent(orderExtID)}/status/${encodeURIComponent(status)}`;
+
+            const response = await fetch(url, {
+                method: "POST",
+                headers: {
+                    "Accept": "application/json"
+                }
+            });
+
+            await parseResponse(response);
+
+            // После успешного запроса обновляем страницу.
+            window.location.reload();
+
+        } catch (error) {
+            console.error(error);
+
+            alert(
+                "Не удалось изменить статус оплаты:\n\n" +
+                error.message
+            );
+        }
+    }
+
+    /**
+     * Получение issues заказа.
+     *
+     * GET /api/orders/$orderID/issues
+     */
+    async function showIssues(orderID) {
+        const issuesContent = document.getElementById("issuesContent");
+
+        issuesContent.textContent = "Loading...";
+        showModal();
+
+        try {
+            const url =
+                `/api/orders/${encodeURIComponent(orderID)}/issues`;
+
+            const response = await fetch(url, {
+                method: "GET",
+                headers: {
+                    "Accept": "application/json"
+                }
+            });
+
+            const issues = await parseResponse(response);
+
+            if (typeof issues === "string") {
+                issuesContent.textContent = issues;
+            } else {
+                issuesContent.textContent =
+                    JSON.stringify(issues, null, 2);
+            }
+
+        } catch (error) {
+            console.error(error);
+
+            issuesContent.textContent =
+                "Не удалось получить issues:\n\n" +
+                error.message;
+        }
+    }
+
+    async function recoveryOrders() {
+        recoveryOrdersButton.disabled = true;
+
+        try {
+            const response = await fetch("/api/recovery/orders", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                },
+            });
+
+            await parseResponse(response);
+
+            // После успешного запроса обновляем страницу.
+            window.location.reload();
+
+        } catch (error) {
+            console.error(error);
+
+            alert(
+                "Ошибка:\n\n" +
+                error.message
+            );
+
+            createOrderButton.disabled = false;
+        }
+    }
+
+    function showModal() {
+        document
+            .getElementById("issuesModal")
+            .classList.add("visible");
+    }
+
+    function hideIssues() {
+        document
+            .getElementById("issuesModal")
+            .classList.remove("visible");
+    }
+
+    function closeModal(event) {
+        if (event.target.id === "issuesModal") {
+            hideIssues();
+        }
+    }
+
+    /**
+     * Безопасный вывод значений в HTML.
+     */
+    function escapeHtml(value) {
+        if (value === null || value === undefined) {
+            return "";
+        }
+
+        return String(value)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#039;");
+    }
+
+    /**
+     * Безопасная передача значения в onclick.
+     */
+    function escapeJs(value) {
+        if (value === null || value === undefined) {
+            return "";
+        }
+
+        return String(value)
+            .replaceAll("\\", "\\\\")
+            .replaceAll("'", "\\'")
+            .replaceAll("\n", "\\n")
+            .replaceAll("\r", "\\r");
+    }
+
+    // Загружаем заказы при открытии страницы.
+    loadOrders();
+</script>
+
+</body>
+</html>

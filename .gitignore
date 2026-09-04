@@ -1,0 +1,5 @@
+docs
+
+app/bin
+app/*.db
+mocks/*.db
