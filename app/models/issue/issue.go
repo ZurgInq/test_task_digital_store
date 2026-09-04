@@ -173,8 +173,11 @@ func (s *Service) requestCodeWithUpdateAddr(ctx context.Context, issue Issue, ap
 func (s *Service) requestCode(ctx context.Context, issue Issue) (Issue, error) {
 	resp, issueResp, err := s.apiClient.postIssue(ctx, &issue)
 	if err != nil {
-		s.log.Info("Save issue error", "issue.ID", issue.ID, "err", err.Error())
-		return s.saveIssueError(ctx, issue.ID, resp, err)
+		if issue.RequestStatus == "" {
+			s.log.Info("Save issue error", "issue.ID", issue.ID, "err", err.Error())
+			return s.saveIssueError(ctx, issue.ID, resp, err)
+		}
+		return issue, nil
 	}
 
 	if issueResp == nil {
