@@ -5,49 +5,62 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 
-	orderPkg "app/models/order"
-
-	"go.rtnl.ai/x/randstr"
+	paymentPkg "app/models/payment"
 )
 
 type InitPayment struct {
-	Orders      *orderPkg.Service
+	Log         *slog.Logger
+	Payments    *paymentPkg.Service
 	PaymentAddr string
 }
 
-func (act *InitPayment) Do(ctx context.Context, order orderPkg.Order) error {
-	extID := fmt.Sprintf("ord_%s", randstr.AlphaNumeric(12))
-	if err := act.initPayment(extID); err != nil {
-		return err
+func (act *InitPayment) Do(ctx context.Context, payment paymentPkg.Payment) error {
+	log := act.Log.With("payment.ID", payment.ID, "payment.OrderGroupID", payment.OrderGroupID)
+
+	if payment.Status != paymentPkg.StatusInit {
+		log.Info("Skip init payment by status", "status", string(payment.Status))
+		return nil
 	}
-	err := act.Orders.UpdateExtID(ctx, order.ID, extID)
+
+	if err := act.initPayment(payment); err != nil {
+		return fmt.Errorf("init payment: %w", err)
+	}
+
+	isUpdated, err := act.Payments.StatusToAwait(ctx, payment.ID, paymentPkg.StatusInit, paymentPkg.StatusAwait)
 	if err != nil {
-		return fmt.Errorf("update extID id=%d, extID=%s: %w", order.ID, extID, err)
+		return fmt.Errorf("change payment status to await")
+	}
+
+	if isUpdated {
+		log.Info("Change payment status to await")
+	} else {
+		log.Info("Skip update payment status: no updated records")
 	}
 
 	return nil
 }
 
-func (act *InitPayment) initPayment(extID string) error {
-	payment := &paymentsReq{
-		OrderID:  extID,
-		Amount:   500,   // stub data
-		Currency: "RUB", // stub data
+func (act *InitPayment) initPayment(payment paymentPkg.Payment) error {
+	paymentReq := &paymentsReq{
+		OrderID:  string(payment.OrderGroupID),
+		Amount:   int(payment.Amount),
+		Currency: string(payment.Currency),
 	}
-	reqBody, err := json.Marshal(payment)
+	reqBody, err := json.Marshal(paymentReq)
 	if err != nil {
-		return fmt.Errorf("create order: marshal payment: %w", err)
+		return fmt.Errorf("marshal payment: %w", err)
 	}
 
 	resp, err := http.Post(act.PaymentAddr+"/api/payments", "application/json", bytes.NewReader(reqBody))
 	if err != nil {
-		return fmt.Errorf("create order: post payment request: %w", err)
+		return fmt.Errorf("post payment request: %w", err)
 	}
 
 	if resp.StatusCode > 300 || resp.StatusCode < 200 {
-		return fmt.Errorf("create order: invalid payment response status code: %d", resp.StatusCode)
+		return fmt.Errorf("invalid payment response status code for init payment: %d", resp.StatusCode)
 	}
 
 	return nil

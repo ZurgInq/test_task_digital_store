@@ -51,11 +51,12 @@ func (i *IssueResp) Render(w http.ResponseWriter, r *http.Request) error {
 }
 
 type Config struct {
-	Host           string `env:"APP_HOST"`
-	Port           string `env:"APP_PORT" envDefault:"3002"`
-	TestTimeoutSec int    `env:"APP_TEST_TIMEOUT_SEC" envDefault:"10"` // Эмуляция долгой обработки запроса
-	TestTimeoutP   int    `env:"APP_TEST_TIMEOUT_P" envDefault:"0"`    // Процент ответов с таймаутом APP_TEST_TIMEOUT_SEC
-	TestErrorsP    int    `env:"APP_TEST_ERRORS_P" envDefault:"0"`     // Процент ответов с ошибкой 500
+	Host              string `env:"APP_HOST"`
+	Port              string `env:"APP_PORT" envDefault:"3002"`
+	TestTimeoutSec    int    `env:"APP_TEST_TIMEOUT_SEC" envDefault:"10"`  // Эмуляция долгой обработки запроса
+	TestTimeoutP      int    `env:"APP_TEST_TIMEOUT_P" envDefault:"0"`     // Процент ответов с таймаутом APP_TEST_TIMEOUT_SEC
+	TestErrorsP       int    `env:"APP_TEST_ERRORS_P" envDefault:"0"`      // Процент ответов с ошибкой 500
+	TestDuplicateCode string `env:"APP_TEST_DUPLICATE_CODE" envDefault:""` // Всегда отдавать один указанный код
 }
 
 func getTestError(timeoutP int, errorP int) string {
@@ -108,9 +109,17 @@ func main() {
 			}
 
 			issueReq := &IssueReq{}
-			render.Decode(r, issueReq)
+			err := render.Decode(r, issueReq)
+			if err != nil {
+				internalServerError(w, r, fmt.Errorf("Decode request: %w", err))
+			}
 
-			err := db.Transaction(func(db *gorm.DB) error {
+			if cfg.TestDuplicateCode != "" {
+				renderIssueOK(w, r, issueReq.RequestID, cfg.TestDuplicateCode)
+				return
+			}
+
+			err = db.Transaction(func(db *gorm.DB) error {
 				exists := &Issue{}
 				err := db.Debug().
 					Where("request_id = ? AND order_id = ?", issueReq.RequestID, issueReq.OrderID).
@@ -128,7 +137,7 @@ func main() {
 						return err
 					}
 
-					renderIssueOK(w, r, *exists, *code)
+					renderIssueOK(w, r, exists.RequestID, code.Code)
 					return nil
 				}
 
@@ -168,7 +177,7 @@ func main() {
 					return err
 				}
 
-				renderIssueOK(w, r, issue, *code)
+				renderIssueOK(w, r, issue.RequestID, code.Code)
 				return nil
 			})
 
@@ -269,11 +278,11 @@ func internalServerError(w http.ResponseWriter, r *http.Request, err error) {
 	})
 }
 
-func renderIssueOK(w http.ResponseWriter, r *http.Request, issue Issue, code Code) {
+func renderIssueOK(w http.ResponseWriter, r *http.Request, reqID string, code string) {
 	render.JSON(w, r, &IssueResp{
 		Status:    "ok",
-		RequestID: issue.RequestID,
-		Code:      code.Code,
+		RequestID: reqID,
+		Code:      code,
 	})
 }
 

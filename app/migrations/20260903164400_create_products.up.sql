@@ -1,11 +1,11 @@
 CREATE TABLE products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sku VARCHAR(255),
-    name VARCHAR(255),
-    type VARCHAR(255),
-    price INTEGER,
-    currency VARCHAR(255),
-    image VARCHAR(255),
+    sku VARCHAR(255) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    type VARCHAR(255) NOT NULL,
+    price INTEGER NOT NULL,
+    currency VARCHAR(255) NOT NULL,
+    image VARCHAR(255) NOT NULL,
     
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,

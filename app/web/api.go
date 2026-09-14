@@ -7,14 +7,13 @@ import (
 	"os"
 	"slices"
 	"strconv"
-	"time"
 
-	"app/actions"
-	"app/models/currency"
+	"app/db"
+	balancePkg "app/models/balance"
 	issuePkg "app/models/issue"
 	orderPkg "app/models/order"
-	"app/models/payment"
-	"app/models/product"
+	paymentPkg "app/models/payment"
+	productPkg "app/models/product"
 	"app/queue"
 
 	"github.com/go-chi/chi/v5"
@@ -28,29 +27,38 @@ type Options struct {
 }
 
 type API struct {
-	log         *slog.Logger
-	orders      *orderPkg.Service
-	payments    *payment.Service
-	queue       *queue.MockQueue
-	issues      *issuePkg.Service
-	paymentAddr string
+	log            *slog.Logger
+	DB             db.UnitOfWork
+	orders         *orderPkg.Service
+	payments       *paymentPkg.Service
+	queue          *queue.MockQueue
+	issues         *issuePkg.Service
+	products       *productPkg.Service
+	balanceService *balancePkg.Service
+	paymentAddr    string
 }
 
 func New(
 	log *slog.Logger,
+	db db.UnitOfWork,
 	orderService *orderPkg.Service,
-	paymentService *payment.Service,
+	paymentService *paymentPkg.Service,
 	queue *queue.MockQueue,
 	issues *issuePkg.Service,
+	products *productPkg.Service,
+	balanceService *balancePkg.Service,
 	paymentAddr string,
 ) *API {
 	return &API{
-		log:         log,
-		orders:      orderService,
-		payments:    paymentService,
-		queue:       queue,
-		issues:      issues,
-		paymentAddr: paymentAddr,
+		log:            log,
+		DB:             db,
+		orders:         orderService,
+		payments:       paymentService,
+		queue:          queue,
+		issues:         issues,
+		products:       products,
+		paymentAddr:    paymentAddr,
+		balanceService: balanceService,
 	}
 }
 
@@ -68,12 +76,19 @@ func (api *API) Start(opts Options) error {
 		r.Post("/", api.createOrder)
 		r.Get("/", api.getOrders)
 		r.Get("/{orderId}", api.getOrder)
+		r.Post("/{orderId}/status/cancel", api.cancelOrder)
 		r.Get("/{orderId}/issues", api.getOrdersIssues)
+	})
+
+	// users
+	r.Route("/api/users", func(r chi.Router) {
+		r.Get("/{userId}/balance", api.getUserBalance)
+		r.Get("/{userId}/transactions", api.getUserTransactions)
 	})
 
 	// payments
 	r.Route("/webhook/payments", func(r chi.Router) {
-		r.Post("/", api.createPayment)
+		r.Post("/", api.webhookPayment)
 	})
 
 	// recovery
@@ -81,8 +96,8 @@ func (api *API) Start(opts Options) error {
 		r.Post("/orders", api.recoveryOrders)
 	})
 
-	// test payments
 	r.Route("/api/payments", func(r chi.Router) {
+		// test payments
 		r.Post("/{orderExtID}/status/{status}", api.changePaymentStatus)
 	})
 
@@ -100,146 +115,62 @@ func (api *API) Start(opts Options) error {
 	return http.ListenAndServe(addr, r)
 }
 
-type CreateOrderReq struct {
-	UserId uint     `json:"userId"`
-	Sku    []string `json:"sku"`
-}
+func (api *API) getUserBalance(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 
-func (api *API) getOrder(w http.ResponseWriter, r *http.Request) {
-	orderIDParam := chi.URLParam(r, "orderId")
-	orderID, err := strconv.Atoi(orderIDParam)
+	userIDParam := chi.URLParam(r, "userId")
+	userID, err := strconv.Atoi(userIDParam)
 	if err != nil {
 		api.internalServerError(w, r, err)
 		return
 	}
 
-	order, err := api.orders.GetByID(r.Context(), uint(orderID))
+	amount, err := api.balanceService.GetAmountForUser(ctx, uint(userID))
 	if err != nil {
 		api.internalServerError(w, r, err)
 		return
 	}
 
-	render.Status(r, http.StatusOK)
-	render.JSON(w, r, order)
-}
-
-func (api *API) getOrders(w http.ResponseWriter, r *http.Request) {
-	orders, err := api.orders.GetAll(r.Context(), 0, 1_000)
-	if err != nil {
-		api.log.Error(err.Error())
-		render.Status(r, http.StatusInternalServerError)
-		render.JSON(w, r, map[string]string{
-			"error": err.Error(),
-		})
-		return
-	}
-
-	render.Status(r, http.StatusOK)
-	render.JSON(w, r, orders)
-}
-
-func (api *API) createOrder(w http.ResponseWriter, r *http.Request) {
-	data := &CreateOrderReq{}
-
-	if err := render.DefaultDecoder(r, data); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	productSKU := make([]product.SKU, 0, len(data.Sku))
-	for _, sku := range data.Sku {
-		productSKU = append(productSKU, product.SKU(sku))
-	}
-
-	createOrder := actions.CreateOrder{
-		Orders: *api.orders,
-	}
-
-	order, err := createOrder.Do(r.Context(), data.UserId, productSKU)
-	if err != nil {
-		api.log.Error(err.Error(), "userId", data.UserId, "sku", data.Sku)
-		render.Status(r, http.StatusInternalServerError)
-		render.JSON(w, r, map[string]string{
-			"error": err.Error(),
-		})
-		return
-	}
-
-	api.log.Info("Order created", "id", order.ID)
-
-	render.Status(r, http.StatusCreated)
-	render.JSON(w, r, order)
-}
-
-type CreatePaymentReq struct {
-	EventID   string `json:"event_id"`
-	OrderID   string `json:"order_id"`
-	Status    string `json:"status"`
-	Amount    int    `json:"amount"`
-	Currency  string `json:"currency"`
-	CreatedAt string `json:"created_at"`
-}
-
-func (api *API) createPayment(w http.ResponseWriter, r *http.Request) {
-	data := &CreatePaymentReq{}
-
-	if err := render.DefaultDecoder(r, data); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	createdAt, err := time.Parse(time.RFC3339, data.CreatedAt)
-	if err != nil {
-		render.Status(r, http.StatusBadRequest)
-		render.JSON(w, r, map[string]any{
-			"error": fmt.Sprintf("parse created_at: %s", err),
-		})
-		return
-	}
-
-	validStatuses := []string{
-		string(payment.StatusPaid),
-		string(payment.StatusFailed),
-	}
-
-	if !slices.Contains(validStatuses, data.Status) {
-		api.log.Error("Unexpected payment status", "payment", data)
-		render.Status(r, http.StatusBadRequest)
-		render.JSON(w, r, map[string]any{
-			"error": "Unexpected payment status",
-		})
-		return
-	}
-
-	err = api.payments.SaveCreatePaymentEvent(r.Context(), payment.Payment{
-		EventID:   data.EventID,
-		OrderID:   data.OrderID,
-		Status:    payment.Status(data.Status),
-		Amount:    currency.Amount(data.Amount),
-		Currency:  currency.Currency(data.Currency),
-		CreatedAt: createdAt,
+	render.JSON(w, r, map[string]any{
+		"user_id": userID,
+		"balance": amount,
 	})
+}
 
+func (api *API) getUserTransactions(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	userIDParam := chi.URLParam(r, "userId")
+	userID, err := strconv.Atoi(userIDParam)
 	if err != nil {
-		api.log.Error(err.Error(), "payment", data)
-		w.WriteHeader(http.StatusBadRequest)
+		api.internalServerError(w, r, err)
 		return
 	}
 
-	w.WriteHeader(http.StatusCreated)
+	amount, err := api.balanceService.GetTransactions(ctx, uint(userID))
+	if err != nil {
+		api.internalServerError(w, r, err)
+		return
+	}
+
+	render.JSON(w, r, map[string]any{
+		"user_id":      userID,
+		"transactions": amount,
+	})
 }
 
 func (api *API) recoveryOrders(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	totalRecovery := 0
-	recoveryCreated := 0
+	recoveryInitPayment := 0
 	recoveryDelivering := 0
 	recoveryDeliveryFailed := 0
 	recoveryOutOfStock := 0
 
 	statuses := []orderPkg.Status{
 		orderPkg.StatusCreated,
+		orderPkg.StatusPaid,
 		orderPkg.StatusDelivering,
 		orderPkg.StatusDeliveryFailed,
 		orderPkg.StatusOutOfStock,
@@ -247,23 +178,33 @@ func (api *API) recoveryOrders(w http.ResponseWriter, r *http.Request) {
 
 	orders, err := api.orders.GetOrdersByStatus(ctx, statuses, 0, 500)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
+		api.internalServerError(w, r, err)
 		return
 	}
 
 	for _, order := range orders {
-		if order.ExtID == nil {
-			err = api.orders.SaveOrderCreatedEvent(ctx, order)
+		// recovery init payments
+		if order.Status == orderPkg.StatusCreated {
+			payment, err := api.payments.GetPaidByOrderGroupID(ctx, order.GroupID)
 			if err != nil {
-				api.log.Error("save order created event: " + err.Error())
+				api.log.Error("get payment: " + err.Error())
 				continue
-			} else {
+			}
+
+			if payment.Status == paymentPkg.StatusInit {
+				err = api.payments.SaveInitEvent(ctx, payment)
+				if err != nil {
+					api.internalServerError(w, r, err)
+					api.log.Error("save init payment event: " + err.Error())
+					continue
+				}
 				totalRecovery++
-				recoveryCreated++
+				recoveryInitPayment++
 			}
 		}
 
 		if slices.Contains([]orderPkg.Status{
+			orderPkg.StatusPaid,
 			orderPkg.StatusDelivering,
 			orderPkg.StatusDeliveryFailed,
 			orderPkg.StatusOutOfStock,
@@ -289,47 +230,11 @@ func (api *API) recoveryOrders(w http.ResponseWriter, r *http.Request) {
 
 	render.JSON(w, r, map[string]any{
 		"total_recovery":           totalRecovery,
-		"recovery_created":         recoveryCreated,
+		"recovery_init_payment":    recoveryInitPayment,
 		"recovery_delivering":      recoveryDelivering,
 		"recovery_delivery_failed": recoveryDeliveryFailed,
 		"recovery_out_of_stock":    recoveryOutOfStock,
 	})
-}
-
-func (api *API) getOrdersIssues(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	orderIDParam := chi.URLParam(r, "orderId")
-	orderID, err := strconv.Atoi(orderIDParam)
-	if err != nil {
-		api.internalServerError(w, r, err)
-	}
-
-	order, err := api.orders.GetByID(ctx, uint(orderID))
-	if err != nil {
-		api.internalServerError(w, r, err)
-	}
-
-	orders, err := api.issues.GetIssuesByOrderExtID(ctx, *order.ExtID)
-
-	if err != nil {
-		api.internalServerError(w, r, err)
-		return
-	}
-
-	render.Status(r, http.StatusOK)
-	render.JSON(w, r, orders)
-}
-
-func (api *API) changePaymentStatus(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-	resp, err := http.Post(api.paymentAddr+path, "application/json", nil)
-	if err != nil {
-		api.internalServerError(w, r, err)
-		return
-	}
-
-	w.WriteHeader(resp.StatusCode)
 }
 
 func (api *API) internalServerError(w http.ResponseWriter, r *http.Request, err error) {

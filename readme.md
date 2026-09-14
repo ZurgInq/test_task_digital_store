@@ -31,9 +31,9 @@
 
 ## Запуск приложения
 
-**Ручной запуск (требует go 1.25)**
+**Ручной запуск (требует go 1.27.1)**
 
-Занимаемые порты по умолчанию 3000-3003. Пути указаны относительно корня проекта.
+Занимаемые порты по умолчанию 3000-3004. Пути указаны относительно корня проекта.
 
 ```bash
 # Запуск основного приложения
@@ -42,9 +42,17 @@ cd app && make run
 
 # Запуск заглушек
 
+# Сервис платежей
 cd mocks/ && go run ./payments/main.go
+
+# Сервис выдачи кодов
 cd mocks/ && go run ./codes/main.go
+
+# Сервис выдачи кодов fallback
 cd mocks/ && APP_PORT=3003 go run ./codes/main.go
+
+# Сервис выдачи кодов для GIFT товаров
+cd mocks/ && APP_PORT=3004 APP_TEST_DUPLICATE_CODE=XXX-YYY-ZZZ go run codes/main.go
 
 # Генерируем пул кодов
 
@@ -108,6 +116,7 @@ APP_TEST_ERRORS_P=30 APP_TEST_TIMEOUT_P=20 go run codes/main.go
 * PAYMENT_ADDR=http://localhost:3001 адрес заглушки сервиса платежей
 * ISSUE_API_ADDR_MAIN=http://localhost:3002 адрес заглушки сервиса выдачи кодов
 * ISSUE_API_ADDR_FALLBACK=http://localhost:3003 фолбэк адрес
+* GIFT_CARD_API_ADDR_MAIN=http://localhost:3004 адрес заглушки для gift кодов
 
 
 По адресу http://localhost:3000/ отдаётся тестовая страница.
@@ -299,6 +308,7 @@ r.Route("/api/payments", func(r chi.Router) {
 * APP_TEST_TIMEOUT_SEC=10 - Эмуляция долгой обработки запроса.
 * APP_TEST_TIMEOUT_P=0 - Процент ответов с таймаутом APP_TEST_TIMEOUT_SEC.
 * APP_TEST_ERRORS_P=0 - Процент ответов с ошибкой 500.
+* APP_TEST_DUPLICATE_CODE - Если указано, то на любой запрос выдаёт данный код.
 
 При старте создаётся БД `codes.db`, схема данных создаётся автоматически, внешних sql файлов для заглушки нет. **БД стартует с пустым списком кодов для выдачи**. Необходимо наполнить БД кодами через АПИ запрос (`test_api/generate_codes.sh`).
 

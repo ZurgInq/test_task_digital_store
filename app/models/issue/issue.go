@@ -79,8 +79,8 @@ func NewService(
 	orders *orderPkg.Service,
 	repo Repository,
 	apiClient *IssueApiClient,
-	issueApiAddrMain string,
-	issueApiAddrFallback string,
+	apiAddrMain string,
+	apiAddrFallback string,
 ) *Service {
 	if apiClient.http == nil {
 		apiClient.http = defaultApiHttpClient
@@ -91,9 +91,19 @@ func NewService(
 		orders,
 		repo,
 		apiClient,
-		issueApiAddrMain,
-		issueApiAddrFallback,
+		apiAddrMain,
+		apiAddrFallback,
 	}
+}
+
+func (s Service) WithApiAddr(
+	main string,
+	fallback string,
+) *Service {
+	s.issueApiAddrMain = main
+	s.issueApiAddrFallback = fallback
+
+	return &s
 }
 
 func (s *Service) GetIssuesByOrderExtID(ctx context.Context, orderExtID string) ([]Issue, error) {
@@ -103,7 +113,7 @@ func (s *Service) GetIssuesByOrderExtID(ctx context.Context, orderExtID string) 
 func (s *Service) RequestCodeForOrder(ctx context.Context, order orderPkg.Order) (Issue, error) {
 	var issue Issue
 
-	incompleteIssue, err := s.repo.GetFirstIncomplete(ctx, *order.ExtID)
+	incompleteIssue, err := s.repo.GetFirstIncomplete(ctx, order.ExtID)
 	if err != nil {
 		return issue, fmt.Errorf("get incomplete issue")
 	}
@@ -114,7 +124,7 @@ func (s *Service) RequestCodeForOrder(ctx context.Context, order orderPkg.Order)
 		issue, err = s.requestCodeWithCreate(ctx, Issue{
 			RequestID:  "req_" + randstr.AlphaNumeric(9),
 			SKU:        "stub_xxx",
-			OrderExtID: *order.ExtID,
+			OrderExtID: order.ExtID,
 			ApiAddr:    s.issueApiAddrMain,
 		})
 	}
@@ -124,7 +134,7 @@ func (s *Service) RequestCodeForOrder(ctx context.Context, order orderPkg.Order)
 	}
 
 	if issue.Code == "" || canRetryWithFallback(issue) {
-		if canRetryWithFallback(issue) {
+		if canRetryWithFallback(issue) && s.issueApiAddrFallback != "" {
 			fallbackAddr := s.issueApiAddrFallback
 			if issue.ApiAddr == fallbackAddr {
 				fallbackAddr = s.issueApiAddrMain

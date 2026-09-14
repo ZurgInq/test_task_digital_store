@@ -1,6 +1,7 @@
 package order
 
 import (
+	"app/models/currency"
 	"app/models/product"
 	"app/queue"
 	"context"
@@ -13,6 +14,7 @@ import (
 )
 
 type Status string
+type GroupID string
 
 const (
 	StatusCreated        = "created"
@@ -22,17 +24,20 @@ const (
 	StatusPaymentFailed  = "payment_failed"
 	StatusOutOfStock     = "out_of_stock"
 	StatusDeliveryFailed = "delivery_failed"
+	StatusCancelled      = "cancelled"
 )
 
 // Заказ
 type Order struct {
 	gorm.Model
 
-	ExtID      *string // ИД для внешних сервисов. Генерируется во время initPayment
-	UserId     uint
-	Status     Status
-	ProductIds []uint `gorm:"serializer:json"`
-	Code       string // Выданный код
+	GroupID   GroupID // ИД для группировки заказов из нескольких товаров
+	ExtID     string  // ИД для внешних сервисов
+	UserID    uint
+	Status    Status
+	ProductID uint
+	Amount    currency.Amount // Зафиксированная сумма для отмены заказа
+	Code      string          // Выданный код
 }
 
 type OrderRepository interface {
@@ -40,10 +45,12 @@ type OrderRepository interface {
 	GetByID(ctx context.Context, id uint) (Order, error)
 	UpdateByID(ctx context.Context, ID uint, order Order) error
 	UpdateStatusByExtID(ctx context.Context, extID string, oldStatus Status, newStatus Status) (bool, error)
-	UpdateExtID(ctx context.Context, ID uint, extID string) error
 	GetAll(ctx context.Context, offset int, limit int) ([]Order, error)
 	GetByExtID(ctx context.Context, extID string) (*Order, error)
 	GetOrdersByStatus(ctx context.Context, status []Status, offset int, limit int) ([]Order, error)
+	GetFirstByGroupID(ctx context.Context, groupID GroupID) (Order, error)
+	FindByGroupID(ctx context.Context, groupID GroupID) ([]Order, error)
+	FindIDByCode(ctx context.Context, code string) (*uint, error)
 }
 
 type Service struct {
@@ -53,9 +60,21 @@ type Service struct {
 	log      *slog.Logger
 }
 
+func (s *Service) ExistsByCode(ctx context.Context, code string) (bool, error) {
+	id, err := s.repo.FindIDByCode(ctx, code)
+	if err != nil {
+		return false, err
+	}
+
+	return id != nil, nil
+}
+
+func (s *Service) FindByGroupID(ctx context.Context, orderGroupID GroupID) ([]Order, error) {
+	return s.repo.FindByGroupID(ctx, orderGroupID)
+}
+
 const (
-	orderPaidQueue    = "order-paid"
-	orderCreatedQueue = "order-created"
+	orderPaidQueue = "orders:paid"
 )
 
 func NewService(
@@ -72,33 +91,28 @@ func NewService(
 	}
 }
 
-func (s *Service) CreateOrder(ctx context.Context, userId uint, sku []product.SKU, extID *string) (Order, error) {
-	productIds, err := s.products.GetIdsBySKU(ctx, sku)
-	if err != nil {
-		return Order{}, fmt.Errorf("get products: %w", err)
-	}
-
-	if len(productIds) == 0 {
-		return Order{}, fmt.Errorf("products not found")
-	}
-
+func (s *Service) CreateOrder(
+	ctx context.Context,
+	userId uint,
+	groupID GroupID,
+	productID uint,
+	extID string,
+	amount currency.Amount,
+) (Order, error) {
 	order := &Order{
-		UserId:     userId,
-		Status:     StatusCreated,
-		ProductIds: productIds,
-		ExtID:      extID,
+		UserID:    userId,
+		GroupID:   groupID,
+		Status:    StatusCreated,
+		ProductID: productID,
+		ExtID:     extID,
+		Amount:    amount,
 	}
-	_, err = s.repo.Create(ctx, order)
-
+	_, err := s.repo.Create(ctx, order)
 	if err != nil {
 		return *order, fmt.Errorf("create order: %w", err)
 	}
 
 	return *order, nil
-}
-
-func (s *Service) UpdateExtID(ctx context.Context, id uint, extID string) error {
-	return s.repo.UpdateExtID(ctx, id, extID)
 }
 
 func (s *Service) UpdateByID(ctx context.Context, id uint, order Order) error {
@@ -130,37 +144,18 @@ func (s *Service) GetByExtID(ctx context.Context, extID string) (*Order, error) 
 	return s.repo.GetByExtID(ctx, extID)
 }
 
+func (s *Service) GetFirstByGroupID(ctx context.Context, groupID GroupID) (Order, error) {
+	return s.repo.GetFirstByGroupID(ctx, groupID)
+}
+
 func (s *Service) SaveOrderPaidEvent(ctx context.Context, order Order) error {
 	orderData, err := json.Marshal(order)
 	if err != nil {
 		return fmt.Errorf("save order paid event: %w", err)
 	}
 
+	s.log.Info("Publish paid event", "orderID", order.ID)
 	return s.queue.Publish(orderPaidQueue, string(orderData))
-}
-
-func (s *Service) SaveOrderCreatedEvent(ctx context.Context, order Order) error {
-	orderData, err := json.Marshal(order)
-	if err != nil {
-		return fmt.Errorf("save order paid event: %w", err)
-	}
-
-	return s.queue.Publish(orderCreatedQueue, string(orderData))
-}
-
-func (s *Service) PollOrderCreatedEvents(
-	ctx context.Context,
-	pollInterval time.Duration,
-	callback func(context.Context, Order) error,
-) {
-	queue.PollEvents(
-		ctx,
-		s.log,
-		s.queue,
-		orderCreatedQueue,
-		pollInterval,
-		callback,
-	)
 }
 
 func (s *Service) PollOrderPaidEvents(

@@ -58,7 +58,7 @@ func seedsProducts(
 
 	for _, item := range seed.Products {
 		p := &product.Product{
-			Sku:      product.SKU(item.Sku),
+			SKU:      product.SKU(item.Sku),
 			Name:     item.Name,
 			Type:     product.Type(item.Type),
 			Price:    currency.Amount(item.Price),
@@ -71,7 +71,8 @@ func seedsProducts(
 			return fmt.Errorf("create product %q: %w", item.Sku, err)
 		}
 
-		slog.Info("Product created", "id", p.ID, "sku", item.Sku)
+		db.DB(ctx).Where("id = ?", p.ID).First(&p)
+		slog.Info("Product created", "id", p.ID, "sku", p.SKU)
 	}
 
 	return nil

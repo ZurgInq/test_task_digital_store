@@ -228,7 +228,7 @@
         </button>
 
     <p>Оплата заказов по кнопкам <strong>paid success</strong> и <strong>paid failed</strong>. Запрос отправляется в сервис платежей.
-        Кнопки доступны только для статуса created и после создания платежа в сервисе платежей (заполняется <strong>extID</strong>).</p>
+        Кнопки доступны только для статуса created.</p>
 
     <p><strong>Большинство запросов ассинхронные - необходимо подождать и вручную обновить страницу.</strong></p>
 
@@ -354,6 +354,13 @@
                 </div>
 
                 <div class="field">
+                    <span class="field-name">groupID:</span>
+                    <span class="field-value">
+                        ${escapeHtml(order.GroupID)}
+                    </span>
+                </div>
+
+                <div class="field">
                     <span class="field-name">status:</span>
                     <span class="field-value">
                         ${escapeHtml(order.Status)}
@@ -368,19 +375,32 @@
                 </div>
 
                 <div class="actions">
-                    ${order.Status == "created" && order.ExtID ? `<button
+                    ${
+                    order.Status == "created" ? `<button
                         class="success-button"
-                        onclick="changePaymentStatus('${escapeJs(order.ExtID)}', 'paid')"
+                        onclick="changePaymentStatus('${escapeJs(order.GroupID)}', 'paid')"
                     >
                         paid success
                     </button>
 
                     <button
                         class="failed-button"
-                        onclick="changePaymentStatus('${escapeJs(order.ExtID)}', 'failed')"
+                        onclick="changePaymentStatus('${escapeJs(order.GroupID)}', 'failed')"
                     >
                         paid failed
-                    </button>` : ""}
+                    </button>` : ""
+                    }
+
+                    ${
+                    order.Status == 'delivery_failed' || order.Status == 'out_of_stock' ? 
+                    `<button
+                        class="failed-button"
+                        onclick="cancelOrder('${escapeJs(order.ID)}', 'failed')"
+                    >
+                        Cancel
+                    </button>`
+                    : ''
+                    }
 
                     <button
                         class="issues-button"
@@ -433,6 +453,34 @@
             );
 
             createOrderButton.disabled = false;
+        }
+    }
+
+    /**
+     * Отмена заказа.
+     *
+     * POST /api/orders/$orderID/status/cancel
+     */
+    async function cancelOrder(orderID) {
+        try {
+            const response = await fetch(`/api/orders/${orderID}/status/cancel`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                }
+            });
+
+            // После успешного запроса обновляем страницу.
+            window.location.reload();
+
+        } catch (error) {
+            console.error(error);
+
+            alert(
+                "Не удалось отменить заказ:\n\n" +
+                error.message
+            );
         }
     }
 

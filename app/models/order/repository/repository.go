@@ -23,15 +23,14 @@ func New(
 }
 
 func (r *repo) Create(ctx context.Context, order *orderPkg.Order) (uint, error) {
-	result := gorm.WithResult()
 	db := r.db.DB(ctx)
 
-	err := gorm.G[orderPkg.Order](db, result).Create(ctx, order)
+	err := gorm.G[orderPkg.Order](db).Create(ctx, order)
 	if err != nil {
 		return 0, fmt.Errorf("create order: %w", err)
 	}
 
-	return order.ID, result.Error
+	return order.ID, nil
 }
 
 func (r *repo) GetByID(ctx context.Context, id uint) (orderPkg.Order, error) {
@@ -74,6 +73,30 @@ func (r *repo) GetByExtID(ctx context.Context, extID string) (*orderPkg.Order, e
 	return &orders[0], nil
 }
 
+func (r *repo) GetFirstByGroupID(ctx context.Context, groupID orderPkg.GroupID) (orderPkg.Order, error) {
+	result := gorm.WithResult()
+	db := r.db.DB(ctx).WithContext(ctx)
+
+	order, err := gorm.G[orderPkg.Order](db, result).Where("group_id = ?", groupID).First(ctx)
+	if err != nil {
+		return order, fmt.Errorf("get first by group id: %w", err)
+	}
+
+	return order, nil
+}
+
+func (r *repo) FindByGroupID(ctx context.Context, groupID orderPkg.GroupID) ([]orderPkg.Order, error) {
+	result := gorm.WithResult()
+	db := r.db.DB(ctx).WithContext(ctx)
+
+	orders, err := gorm.G[orderPkg.Order](db, result).Where("group_id = ?", groupID).Find(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get first by group id: %w", err)
+	}
+
+	return orders, nil
+}
+
 func (r *repo) UpdateByID(ctx context.Context, ID uint, order orderPkg.Order) error {
 	result := gorm.WithResult()
 	db := r.db.DB(ctx)
@@ -105,18 +128,6 @@ func (r *repo) UpdateStatusByExtID(ctx context.Context, extID string, oldStatus 
 	return affected > 0, nil
 }
 
-func (r *repo) UpdateExtID(ctx context.Context, id uint, extID string) error {
-	result := gorm.WithResult()
-	db := r.db.DB(ctx)
-
-	_, err := gorm.G[orderPkg.Order](db, result).Where("id = ?", id).Update(ctx, "ext_id", extID)
-	if err != nil {
-		return fmt.Errorf("update ext id %d: %w", id, err)
-	}
-
-	return nil
-}
-
 func (r *repo) GetOrdersByStatus(ctx context.Context, statuses []orderPkg.Status, offset int, limit int) ([]orderPkg.Order, error) {
 	result := gorm.WithResult()
 	db := r.db.DB(ctx)
@@ -131,4 +142,25 @@ func (r *repo) GetOrdersByStatus(ctx context.Context, statuses []orderPkg.Status
 	}
 
 	return orders, nil
+}
+
+func (r *repo) FindIDByCode(ctx context.Context, code string) (*uint, error) {
+	result := gorm.WithResult()
+	db := r.db.DB(ctx)
+
+	orders, err := gorm.G[orderPkg.Order](db, result).
+		Select("id").
+		Where("code = ?", code).
+		Limit(1).
+		Find(ctx)
+
+	if err != nil {
+		return nil, fmt.Errorf("get id by code: %w", err)
+	}
+
+	if len(orders) == 0 {
+		return nil, nil
+	}
+
+	return &orders[0].ID, nil
 }

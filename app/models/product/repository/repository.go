@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"app/db"
-	modelsProduct "app/models/product"
+	productPkg "app/models/product"
 
 	"gorm.io/gorm"
 )
@@ -22,23 +22,22 @@ func New(
 	}
 }
 
-func (r *repo) Create(ctx context.Context, order *modelsProduct.Product) (uint, error) {
-	result := gorm.WithResult()
+func (r *repo) Create(ctx context.Context, product *productPkg.Product) (uint, error) {
 	db := r.db.DB(ctx)
 
-	err := gorm.G[modelsProduct.Product](db, result).Create(ctx, order)
+	err := gorm.G[productPkg.Product](db).Create(ctx, product)
 	if err != nil {
 		return 0, fmt.Errorf("Create product: %w", err)
 	}
 
-	return order.ID, result.Error
+	return product.ID, nil
 }
 
-func (r *repo) GetById(ctx context.Context, id uint) (modelsProduct.Product, error) {
+func (r *repo) GetByID(ctx context.Context, id uint) (productPkg.Product, error) {
 	result := gorm.WithResult()
 	db := r.db.DB(ctx)
 
-	order, err := gorm.G[modelsProduct.Product](db, result).Where("id = ?", id).First(ctx)
+	order, err := gorm.G[productPkg.Product](db, result).Where("id = ?", id).First(ctx)
 	if err != nil {
 		return order, fmt.Errorf("get product by id %d: %w", id, err)
 	}
@@ -46,11 +45,11 @@ func (r *repo) GetById(ctx context.Context, id uint) (modelsProduct.Product, err
 	return order, nil
 }
 
-func (r *repo) GetIdsBySKU(ctx context.Context, sku []modelsProduct.SKU) ([]uint, error) {
+func (r *repo) GetIdsBySKU(ctx context.Context, sku []productPkg.SKU) ([]uint, error) {
 	db := r.db.DB(ctx)
-	products := make([]modelsProduct.Product, 0, len(sku))
+	products := make([]productPkg.Product, 0, len(sku))
 
-	err := db.WithContext(ctx).Debug().Select("id").Where("sku IN ?", sku).Limit(len(sku)).Find(&products).Error
+	err := db.WithContext(ctx).Select("id").Where("sku IN ?", sku).Limit(len(sku)).Find(&products).Error
 	if err != nil {
 		return nil, fmt.Errorf("get ids by sku: %w", err)
 	}
@@ -61,4 +60,28 @@ func (r *repo) GetIdsBySKU(ctx context.Context, sku []modelsProduct.SKU) ([]uint
 	}
 
 	return ids, nil
+}
+
+func (r *repo) GetBySKUs(ctx context.Context, sku []productPkg.SKU) ([]productPkg.Product, error) {
+	db := r.db.DB(ctx)
+	products := make([]productPkg.Product, 0, len(sku))
+
+	err := db.WithContext(ctx).Where("sku IN ?", sku).Limit(len(sku)).Find(&products).Error
+	if err != nil {
+		return nil, fmt.Errorf("get ids by sku: %w", err)
+	}
+
+	return products, nil
+}
+
+func (r *repo) GetBySKU(ctx context.Context, sku productPkg.SKU) (productPkg.Product, error) {
+	db := r.db.DB(ctx)
+	var product productPkg.Product
+
+	err := db.WithContext(ctx).Where("sku = ?", sku).First(product).Error
+	if err != nil {
+		return product, fmt.Errorf("get by sku: %w", err)
+	}
+
+	return product, nil
 }

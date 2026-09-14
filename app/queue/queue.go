@@ -10,15 +10,18 @@ import (
 
 type MockQueue struct {
 	redisMock *RedisMock
+	log       *slog.Logger
 }
 
-func NewMockQueue() *MockQueue {
+func NewMockQueue(log *slog.Logger) *MockQueue {
 	return &MockQueue{
 		redisMock: NewRedisMock(),
+		log:       log,
 	}
 }
 
 func (m *MockQueue) Publish(queue string, data string) error {
+	m.log.Info("Publish to queue", "queue", queue, "data", data)
 	m.redisMock.RPush(queue, string(data))
 	return nil
 }
